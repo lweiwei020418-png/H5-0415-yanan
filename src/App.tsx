@@ -622,16 +622,48 @@ const MusicPlayer = () => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [customAudioUrl, setCustomAudioUrl] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  // Initialize audio element
+  useEffect(() => {
+    if (!audioRef.current) {
+      const audio = new Audio(customAudioUrl || "https://cdn.pixabay.com/audio/2022/01/18/audio_d0a13f69d2.mp3");
+      audio.loop = true;
+      audioRef.current = audio;
+      
+      // Add error event listener
+      audio.addEventListener('error', (e) => {
+        console.error('Audio error:', e);
+        setError('音频加载失败，请检查网络连接');
+      });
+      
+      // Add canplay event listener
+      audio.addEventListener('canplay', () => {
+        console.log('Audio can play');
+        setError(null);
+      });
+    }
+  }, [customAudioUrl]);
 
   const togglePlay = () => {
     if (audioRef.current) {
-      if (isPlaying) {
-        audioRef.current.pause();
-      } else {
-        audioRef.current.play().catch(err => console.error("Playback failed:", err));
+      try {
+        if (isPlaying) {
+          audioRef.current.pause();
+        } else {
+          audioRef.current.play().catch(err => {
+            console.error("Playback failed:", err);
+            setError('播放失败，请点击页面后重试');
+          });
+        }
+        setIsPlaying(!isPlaying);
+      } catch (err) {
+        console.error("Toggle play error:", err);
+        setError('操作失败，请重试');
       }
-      setIsPlaying(!isPlaying);
+    } else {
+      setError('音频初始化失败');
     }
   };
 
@@ -639,12 +671,26 @@ const MusicPlayer = () => {
     if (isGenerating) return;
     
     try {
-      if (!(await (window as any).aistudio.hasSelectedApiKey())) {
-        await (window as any).aistudio.openSelectKey();
+      // Check if aistudio is available
+      if (typeof window !== 'undefined' && (window as any).aistudio) {
+        if (!(await (window as any).aistudio.hasSelectedApiKey())) {
+          await (window as any).aistudio.openSelectKey();
+          return;
+        }
+      } else {
+        setError('AI 功能仅在特定环境中可用');
         return;
       }
 
       setIsGenerating(true);
+      setError(null);
+      
+      // Check if API key is available
+      if (!process.env.GEMINI_API_KEY) {
+        setError('API 密钥未配置');
+        return;
+      }
+      
       const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
       const response = await ai.models.generateContentStream({
         model: "lyria-3-clip-preview",
@@ -667,6 +713,11 @@ const MusicPlayer = () => {
         }
       }
 
+      if (!audioBase64) {
+        setError('AI 音乐生成失败');
+        return;
+      }
+
       const binary = atob(audioBase64);
       const bytes = new Uint8Array(binary.length);
       for (let i = 0; i < binary.length; i++) {
@@ -681,12 +732,16 @@ const MusicPlayer = () => {
       setTimeout(() => {
         if (audioRef.current) {
           audioRef.current.src = url;
-          audioRef.current.play();
+          audioRef.current.play().catch(err => {
+            console.error("AI track playback failed:", err);
+            setError('播放失败，请点击页面后重试');
+          });
         }
       }, 100);
 
     } catch (error) {
       console.error("AI Music Generation failed:", error);
+      setError('AI 音乐生成失败');
     } finally {
       setIsGenerating(false);
     }
@@ -694,6 +749,18 @@ const MusicPlayer = () => {
 
   return (
     <div className="fixed bottom-8 right-32 z-[100] flex flex-col items-end gap-4">
+      {/* Error Message */}
+      {error && (
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: 10 }}
+          className="bg-red-500 text-white text-[10px] font-black px-3 py-1.5 rounded-full shadow-xl whitespace-nowrap"
+        >
+          {error}
+        </motion.div>
+      )}
+
       {/* AI Generation Tooltip/Button */}
       <AnimatePresence>
         {!isPlaying && !isGenerating && (
@@ -711,11 +778,7 @@ const MusicPlayer = () => {
       </AnimatePresence>
 
       <div className="relative">
-        <audio
-          ref={audioRef}
-          src={customAudioUrl || "https://cdn.pixabay.com/audio/2022/01/18/audio_d0a13f69d2.mp3"}
-          loop
-        />
+        {/* Audio element is created in useEffect */}
         
         {/* Visualizer Ring */}
         {isPlaying && (
